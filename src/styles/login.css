@@ -1,0 +1,140 @@
+:root {
+  /* tokens mirroring your RN Theme */
+  --bg: #1b2b2a;          /* background */
+  --card: #0f1d1c;        /* dark card (use this if you want dark card) */
+  --card-light: #ffffff;  /* light card option */
+  --text: #111418;
+  --muted: #6b7a7a;
+  --primary: #94bfa2;
+  --primary-hover: #a2cdb0;
+  --white: #ffffff;
+
+  --radius-md: 12px;
+  --radius-lg: 16px;
+
+  --space-xs: 6px;
+  --space-sm: 10px;
+  --space-md: 14px;
+  --space-lg: 18px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+}
+
+/* full-screen background like RN screen */
+.login-screen {
+  min-height: 100vh;
+  width: 100%;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  padding: calc(var(--space-xl) * 1.2) var(--space-xl);
+  background-image: radial-gradient(
+    circle at 30% 20%,
+    rgba(255, 255, 255, 0.03),
+    rgba(0, 0, 0, 0) 60%
+  );
+}
+
+/* responsive card sizing translated from your RN code */
+.login-card {
+  width: clamp(300px, 92vw, 480px); /* mobile default */
+  background: var(--card-light);    /* switch to var(--card) for dark card */
+  color: var(--text);
+  border-radius: var(--radius-lg);
+  padding: calc(var(--space-xl) * 1.2) calc(var(--space-xl) * 1.2);
+  box-shadow:
+    0 2px 6px rgba(0,0,0,0.08),
+    0 10px 30px rgba(0,0,0,0.06);
+}
+
+/* tablet */
+@media (min-width: 600px) and (max-width: 899.98px) {
+  .login-card {
+    width: clamp(360px, 70vw, 640px);
+    padding: calc(var(--space-xl) * 1.2) calc(var(--space-xl) * 1.6);
+  }
+}
+
+/* desktop */
+@media (min-width: 900px) {
+  .login-card {
+    width: clamp(420px, 45vw, 900px);
+    padding: calc(var(--space-xl) * 1.5) calc(var(--space-xl) * 1.8);
+  }
+}
+
+/* headings & text */
+.login-title {
+  margin: 0 0 var(--space-md);
+  font-weight: 700;
+  text-align: center;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1.08;
+}
+
+.login-subtitle {
+  margin: 0 0 var(--space-lg);
+  color: var(--muted);
+  text-align: center;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+/* responsive typography scale */
+@media (min-width: 600px) and (max-width: 899.98px) {
+  .login-title { font-size: 26px; }
+  .login-subtitle { font-size: 16px; }
+}
+@media (min-width: 900px) {
+  .login-title { font-size: 36px; }
+  .login-subtitle { font-size: 18px; }
+}
+
+.login-note {
+  color: var(--muted);
+  text-align: left;
+  font-size: 13px;
+}
+@media (min-width: 900px) {
+  .login-note { font-size: 15px; }
+}
+
+/* buttons */
+.btn-primary {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 10px;
+  background: var(--primary);
+  color: #000;
+  font-weight: 700;
+  cursor: pointer;
+  margin-top: var(--space-md);
+  padding: 12px 16px; /* mobile baseline */
+  transition: background 0.2s ease;
+}
+.btn-primary:hover { background: var(--primary-hover); }
+
+@media (min-width: 600px) and (max-width: 899.98px) {
+  .btn-primary { padding: 14px 18px; }
+}
+@media (min-width: 900px) {
+  .btn-primary { padding: 18px 22px; }
+}
+
+.btn-ghost {
+  margin-top: var(--space-md);
+  padding: var(--space-sm) 0;
+  text-align: center;
+  color: var(--primary);
+  font-weight: 600;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+/* alert spacing helpers (if you keep MUI Alerts) */
+.alert { margin-bottom: var(--space-md); }
