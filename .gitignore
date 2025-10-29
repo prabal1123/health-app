@@ -9,6 +9,11 @@ dist
 .env.local
 .env.development
 .env.production
+.env.functions
+*.envgit add .gitignore
+git commit -m "Add .env.functions to .gitignore and remove sensitive file"
+git push origin main --force
+
 
 # Misc
 .DS_Store
