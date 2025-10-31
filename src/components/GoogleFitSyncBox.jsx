@@ -1,29 +1,43 @@
-// // src/components/GoogleFitSyncBox.jsx
 // import React, { useEffect, useState } from 'react';
 // import { Box, Typography, Button, CircularProgress } from '@mui/material';
 // import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 // import { supabase } from '../supabase';
 
-// export default function GoogleFitSyncBox({ user, onSync, stepsToday, lastSynced, stepsSource, stepsLoading, stepsError }) {
+// export default function GoogleFitSyncBox({ 
+//     user, 
+//     onSync, 
+//     onLogout, 
+//     stepsToday, 
+//     lastSynced, 
+//     stepsSource, 
+//     stepsLoading, 
+//     stepsError 
+// }) {
 //   const [isConnected, setIsConnected] = useState(false);
 
 //   useEffect(() => {
 //     const checkConnection = async () => {
+//       if (!user?.id) return;
+      
 //       const { data, error } = await supabase
 //         .from('google_fit_tokens')
 //         .select('*')
 //         .eq('user_id', user.id)
 //         .single();
+
 //       if (data && !error) {
 //         setIsConnected(true);
+//       } else {
+//         setIsConnected(false);
 //       }
 //     };
-//     if (user?.id) checkConnection();
+//     checkConnection();
 //   }, [user]);
 
 //   const handleGoogleFitConnect = () => {
 //     const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-//     const redirectUri = `${window.location.origin}/googlefit-callback`;
+//     const siteUrl = import.meta.env.VITE_SITE_URL; // ✅ NEW: Use dynamic SITE_URL
+//     const redirectUri = `${siteUrl}/googlefit-callback`;
 //     const scope = [
 //       'https://www.googleapis.com/auth/fitness.activity.read',
 //       'https://www.googleapis.com/auth/fitness.location.read'
@@ -72,89 +86,94 @@
 //         </Typography>
 //       )}
 
-//       {!stepsLoading && !isConnected && (
-//         <Button variant="outlined" onClick={handleGoogleFitConnect} sx={{ mt: 1 }}>
-//           CONNECT GOOGLE FIT
-//         </Button>
-//       )}
-
-//       <Button
-//         variant="contained"
-//         onClick={onSync}
-//         sx={{ mt: 2 }}
-//         disabled={stepsLoading || !isConnected}
-//       >
-//         SYNC NOW
-//       </Button>
+//       {/* ✅ NEW LOGIC: Conditionally render buttons */}
+//       <Box sx={{ mt: 1 }}>
+//         {isConnected ? (
+//           <>
+//             <Button
+//               variant="contained"
+//               onClick={onSync}
+//               sx={{ mt: 1 }}
+//               disabled={stepsLoading}
+//             >
+//               SYNC NOW
+//             </Button>
+//             <Button
+//               variant="text"
+//               onClick={onLogout}
+//               sx={{ mt: 1, color: 'text.secondary' }}
+//             >
+//               Logout
+//             </Button>
+//           </>
+//         ) : (
+//           <Button variant="outlined" onClick={handleGoogleFitConnect}>
+//             CONNECT GOOGLE FIT
+//           </Button>
+//         )}
+//       </Box>
 //     </Box>
 //   );
 // }
-
 import React, { useEffect, useState } from 'react';
 import { Box, Typography, Button, CircularProgress } from '@mui/material';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { supabase } from '../supabase';
 
-export default function GoogleFitSyncBox({ 
-    user, 
-    onSync, 
-    onLogout, 
-    stepsToday, 
-    lastSynced, 
-    stepsSource, 
-    stepsLoading, 
-    stepsError 
+const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+const SITE_URL = import.meta.env.VITE_SITE_URL || (typeof window !== 'undefined' ? window.location.origin : '');
+const REDIRECT_URI = `${SITE_URL}/googlefit-callback`;
+const SCOPES = [
+  'https://www.googleapis.com/auth/fitness.activity.read',
+  'https://www.googleapis.com/auth/fitness.location.read',
+  'https://www.googleapis.com/auth/userinfo.email',
+].join(' ');
+
+export default function GoogleFitSyncBox({
+  user,
+  onSync,
+  onLogout,
+  stepsToday,
+  lastSynced,
+  stepsSource,
+  stepsLoading,
+  stepsError,
 }) {
   const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
     const checkConnection = async () => {
       if (!user?.id) return;
-      
       const { data, error } = await supabase
         .from('google_fit_tokens')
-        .select('*')
+        .select('user_id')
         .eq('user_id', user.id)
-        .single();
-
-      if (data && !error) {
-        setIsConnected(true);
-      } else {
-        setIsConnected(false);
-      }
+        .maybeSingle();
+      setIsConnected(Boolean(data && !error));
     };
     checkConnection();
-  }, [user]);
+  }, [user?.id]);
 
   const handleGoogleFitConnect = () => {
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-    const siteUrl = import.meta.env.VITE_SITE_URL; // ✅ NEW: Use dynamic SITE_URL
-    const redirectUri = `${siteUrl}/googlefit-callback`;
-    const scope = [
-      'https://www.googleapis.com/auth/fitness.activity.read',
-      'https://www.googleapis.com/auth/fitness.location.read'
-    ].join(' ');
+    const state = Math.random().toString(36).slice(2);
+    localStorage.setItem('googlefit_oauth_state', state);
 
-    const authUrl =
-      `https://accounts.google.com/o/oauth2/v2/auth?response_type=code&` +
-      `client_id=${clientId}&redirect_uri=${redirectUri}&scope=${scope}&access_type=offline` +
-      `&prompt=consent`;
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: CLIENT_ID,
+      redirect_uri: REDIRECT_URI,
+      scope: SCOPES,
+      access_type: 'offline',
+      prompt: 'consent',
+      include_granted_scopes: 'true',
+      state,
+    });
 
-    window.location.href = authUrl;
+    window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
   };
 
   return (
-    <Box
-      sx={{
-        border: '1px solid #ddd',
-        borderRadius: 4,
-        p: 2,
-        boxShadow: 2,
-        minWidth: 220,
-        textAlign: 'center',
-        bgcolor: '#fff'
-      }}
-    >
+    <Box sx={{ border: '1px solid #ddd', borderRadius: 4, p: 2, boxShadow: 2, minWidth: 220, textAlign: 'center', bgcolor: '#fff' }}>
       <Typography variant="h6">Steps Today</Typography>
       <Typography variant="h4" sx={{ mb: 1 }}>
         {stepsLoading ? 'Loading...' : (stepsToday ?? '—')}
@@ -178,23 +197,13 @@ export default function GoogleFitSyncBox({
         </Typography>
       )}
 
-      {/* ✅ NEW LOGIC: Conditionally render buttons */}
       <Box sx={{ mt: 1 }}>
         {isConnected ? (
           <>
-            <Button
-              variant="contained"
-              onClick={onSync}
-              sx={{ mt: 1 }}
-              disabled={stepsLoading}
-            >
+            <Button variant="contained" onClick={onSync} sx={{ mt: 1 }} disabled={stepsLoading}>
               SYNC NOW
             </Button>
-            <Button
-              variant="text"
-              onClick={onLogout}
-              sx={{ mt: 1, color: 'text.secondary' }}
-            >
+            <Button variant="text" onClick={onLogout} sx={{ mt: 1, color: 'text.secondary' }}>
               Logout
             </Button>
           </>
@@ -204,6 +213,17 @@ export default function GoogleFitSyncBox({
           </Button>
         )}
       </Box>
+
+      {lastSynced && (
+        <Typography variant="caption" sx={{ display: 'block', mt: 1 }}>
+          Last synced: {new Date(lastSynced).toLocaleString()}
+        </Typography>
+      )}
+      {stepsSource && (
+        <Typography variant="caption" sx={{ display: 'block' }}>
+          Source: {stepsSource}
+        </Typography>
+      )}
     </Box>
   );
 }
