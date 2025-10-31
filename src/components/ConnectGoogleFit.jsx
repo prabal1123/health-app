@@ -25,10 +25,10 @@
 import React from 'react';
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-const SITE_URL = import.meta.env.VITE_SITE_URL || (typeof window !== 'undefined' ? window.location.origin : '');
+const SITE_URL =
+  import.meta.env.VITE_SITE_URL || (typeof window !== 'undefined' ? window.location.origin : '');
 const REDIRECT_URI = `${SITE_URL}/googlefit-callback`;
 
-// keep scopes consistent; add email if your backend needs it
 const SCOPES = [
   'https://www.googleapis.com/auth/fitness.activity.read',
   'https://www.googleapis.com/auth/fitness.location.read',
@@ -37,9 +37,9 @@ const SCOPES = [
 
 export default function ConnectGoogleFit() {
   const handleConnect = () => {
-    // CSRF protection
+    // CSRF state (per-tab)
     const state = Math.random().toString(36).slice(2);
-    localStorage.setItem('googlefit_oauth_state', state);
+    sessionStorage.setItem('gf_oauth_state_v1', state);
 
     const params = new URLSearchParams({
       response_type: 'code',
