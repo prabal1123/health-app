@@ -217,15 +217,23 @@
 //   }
 // });
 // @ts-nocheck
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+// @ts-nocheck
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.44.0';
 
-serve(async (req) => {
-  const origin = req.headers.get('origin') ?? '*';
+const allowedOrigins = [
+  'http://localhost:5173',
+  'https://health-app-8ulh.vercel.app',
+];
+
+Deno.serve(async (req) => {
+  const origin = req.headers.get('origin') ?? '';
   const corsHeaders = {
-    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Origin': allowedOrigins.includes(origin)
+      ? origin
+      : allowedOrigins[0],
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Headers':
+      'authorization, x-client-info, apikey, content-type',
     'Content-Type': 'application/json',
   };
 
@@ -243,35 +251,32 @@ serve(async (req) => {
 
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) {
-      return new Response(JSON.stringify({ error: 'Authorization header missing.' }), {
-        status: 401,
-        headers: corsHeaders,
-      });
+      return new Response(
+        JSON.stringify({ error: 'Authorization header missing.' }),
+        { status: 401, headers: corsHeaders },
+      );
     }
-    const supabaseJwt = authHeader.split(' ')[1];
 
+    const supabaseJwt = authHeader.split(' ')[1];
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     );
 
-    // Verify the Supabase user from the JWT
     const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(supabaseJwt);
     if (authError || !user) {
-      console.error('Supabase JWT verification failed:', authError);
-      return new Response(JSON.stringify({ error: 'Unauthorized: Invalid Supabase session.' }), {
-        status: 401,
-        headers: corsHeaders,
-      });
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized: Invalid Supabase session.' }),
+        { status: 401, headers: corsHeaders },
+      );
     }
+
     const userId = user.id;
+    const { userTimeZone } = await req.json().catch(() => ({
+      userTimeZone: 'UTC' as const,
+    }));
 
-    const { userTimeZone } = await req.json().catch(() => ({ userTimeZone: 'UTC' as const }));
-    if (!userTimeZone) {
-      console.warn('userTimeZone not provided in request body. Using default UTC for aggregation.');
-    }
-
-    // 1) Get refresh token
+    // 1️⃣ Get refresh token
     const { data: tokenRow, error: tokenError } = await supabaseAdmin
       .from('google_fit_tokens')
       .select('refresh_token')
@@ -279,18 +284,19 @@ serve(async (req) => {
       .maybeSingle();
 
     if (tokenError || !tokenRow?.refresh_token) {
-      console.warn('Refresh token missing or DB error:', tokenError);
-      // Self-heal: ensure any broken row is removed
       await supabaseAdmin.from('google_fit_tokens').delete().eq('user_id', userId);
       return new Response(
-        JSON.stringify({ error: 'Google Fit not connected.', code: 'RECONNECT_REQUIRED' }),
-        { headers: corsHeaders, status: 409 }
+        JSON.stringify({
+          error: 'Google Fit not connected.',
+          code: 'RECONNECT_REQUIRED',
+        }),
+        { headers: corsHeaders, status: 409 },
       );
     }
 
     const refresh_token = tokenRow.refresh_token;
 
-    // 2) Exchange refresh token for new access token
+    // 2️⃣ Exchange refresh token → access token
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -303,51 +309,30 @@ serve(async (req) => {
     });
 
     const tokenData = await tokenRes.json().catch(() => ({}));
-    const googleToken: string | undefined = tokenData?.access_token;
-    const expiresIn: number | undefined = tokenData?.expires_in;
+    const googleToken = tokenData?.access_token;
+    const expiresIn = tokenData?.expires_in;
 
     if (!tokenRes.ok || !googleToken) {
-      const errCode = tokenData?.error ?? '';
-      const errDesc = tokenData?.error_description ?? tokenData?.error ?? 'Bad Request';
-
-      console.error('Failed to refresh Google Fit access token:', tokenData);
-
-      // If refresh token is invalid/revoked → self-heal: delete row & ask client to reconnect
-      if (errCode === 'invalid_grant' || errCode === 'unauthorized_client' || errDesc?.includes('invalid_grant')) {
-        await supabaseAdmin.from('google_fit_tokens').delete().eq('user_id', userId);
-        return new Response(
-          JSON.stringify({
-            error: 'Google authorization expired or revoked.',
-            code: 'RECONNECT_REQUIRED',
-            details: errDesc,
-          }),
-          { headers: corsHeaders, status: 409 }
-        );
-      }
-
+      const errDesc =
+        tokenData?.error_description ?? tokenData?.error ?? 'Bad Request';
+      await supabaseAdmin.from('google_fit_tokens').delete().eq('user_id', userId);
       return new Response(
-        JSON.stringify({ error: 'Failed to refresh Google Fit access token.', details: errDesc }),
-        { headers: corsHeaders, status: 401 }
+        JSON.stringify({
+          error: 'Failed to refresh Google Fit access token.',
+          details: errDesc,
+        }),
+        { headers: corsHeaders, status: 401 },
       );
     }
 
-    // Update access token metadata (keep existing refresh_token)
-    const { error: updateTokenError } = await supabaseAdmin
-      .from('google_fit_tokens')
-      .update({
-        access_token: googleToken,
-        expires_in: expiresIn ?? null,
-        expires_at: expiresIn ? new Date(Date.now() + expiresIn * 1000).toISOString() : null,
-      })
-      .eq('user_id', userId);
-    if (updateTokenError) {
-      console.error('Error updating access token in DB:', updateTokenError);
-    }
-
-    // 3) Fetch step data from Google Fit API (aggregate today)
+    // 3️⃣ Fetch step data
     const now = new Date();
-    const startTimeMillis = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const endTimeMillis = Date.now() - 60_000; // pad 1 min
+    const startTimeMillis = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    ).getTime();
+    const endTimeMillis = Date.now() - 60_000;
 
     const fitResponse = await fetch(
       'https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate',
@@ -361,46 +346,28 @@ serve(async (req) => {
           aggregateBy: [
             {
               dataTypeName: 'com.google.step_count.delta',
-              dataSourceId: 'derived:com.google.step_count.delta:com.google.android.gms:merge_step_deltas',
+              dataSourceId:
+                'derived:com.google.step_count.delta:com.google.android.gms:merge_step_deltas',
             },
           ],
-          bucketByTime: { durationMillis: 86_400_000, timeZone: userTimeZone || 'UTC' },
+          bucketByTime: { durationMillis: 86_400_000, timeZone: userTimeZone },
           startTimeMillis,
           endTimeMillis,
-          includeAllApps: true,
         }),
-      }
+      },
     );
 
     const fitData = await fitResponse.json().catch(() => ({}));
-    console.log('📦 Raw Google Fit API response:', JSON.stringify(fitData, null, 2));
-
     if (!fitResponse.ok) {
-      console.error('Google Fit API error response:', fitData);
       const details = fitData?.error?.message ?? fitResponse.statusText;
-
-      // If token just got invalid, ask for reconnect (rare race)
-      if (fitData?.error?.code === 401) {
-        return new Response(
-          JSON.stringify({
-            error: 'Google Fit access token invalid or expired.',
-            code: 'RECONNECT_REQUIRED',
-            details,
-          }),
-          { headers: corsHeaders, status: 409 }
-        );
-      }
-
       return new Response(
-        JSON.stringify({ error: 'Failed to fetch from Google Fit API', details }),
-        { headers: corsHeaders, status: fitResponse.status }
+        JSON.stringify({ error: 'Failed to fetch from Google Fit', details }),
+        { headers: corsHeaders, status: fitResponse.status },
       );
     }
 
-    // Sum steps
     let todaySteps = 0;
-    const buckets = fitData?.bucket ?? [];
-    for (const bucket of buckets) {
+    for (const bucket of fitData?.bucket ?? []) {
       for (const dataset of bucket?.dataset ?? []) {
         for (const point of dataset?.point ?? []) {
           for (const value of point?.value ?? []) {
@@ -410,9 +377,8 @@ serve(async (req) => {
       }
     }
 
-    // 4) Update user_info
     const isoNow = new Date().toISOString();
-    const { error: updateUserInfoError } = await supabaseAdmin
+    await supabaseAdmin
       .from('user_info')
       .update({
         steps_source: 'googlefit',
@@ -421,29 +387,17 @@ serve(async (req) => {
       })
       .eq('id', userId);
 
-    if (updateUserInfoError) {
-      console.error('Error updating user_info in DB:', updateUserInfoError);
-      return new Response(
-        JSON.stringify({ error: 'Failed to update user info in database.', details: updateUserInfoError.message }),
-        { headers: corsHeaders, status: 500 }
-      );
-    }
-
-    // Success
-    return new Response(JSON.stringify({ stepsToday: todaySteps, lastSynced: isoNow }), {
-      headers: corsHeaders,
-      status: 200,
-    });
+    return new Response(
+      JSON.stringify({ stepsToday: todaySteps, lastSynced: isoNow }),
+      { headers: corsHeaders, status: 200 },
+    );
   } catch (err) {
-    console.error('❌ Unhandled Google Fit sync error in Edge Function:', err);
-    return new Response(JSON.stringify({ error: 'Internal server error.', details: String(err?.message ?? err) }), {
-      headers: {
-        'Access-Control-Allow-Origin': origin,
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-        'Content-Type': 'application/json',
-      },
-      status: 500,
-    });
+    console.error('❌ Sync error:', err);
+    return new Response(
+      JSON.stringify({
+        error: err?.message ?? 'Internal server error.',
+      }),
+      { headers: corsHeaders, status: 500 },
+    );
   }
 });
