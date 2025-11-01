@@ -95,8 +95,6 @@
 //     </Box>
 //   );
 // }
-
-
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabase';
@@ -113,43 +111,60 @@ export default function GoogleFitCallback() {
       ranRef.current = true;
 
       try {
-        // 1️⃣ Read code and state from URL
+        // --- parse params first
         const params = new URLSearchParams(window.location.search);
         const code = params.get('code');
         const returnedState = params.get('state');
+        const expectedState = localStorage.getItem('googlefit_oauth_state');
+
+        // --- DEBUG
+        // console.group('🔎 Google Fit OAuth Callback (GoogleFitCallback.jsx)');
+        // console.log('CALLBACK origin:', window.location.origin);
+        // console.log('returnedState (from URL):', returnedState);
+        // console.log('expectedState (from localStorage):', expectedState);
+        // console.log('Full query string:', window.location.search);
+        // console.groupEnd();
 
         if (!code) {
+          console.error('❌ Missing authorization code in callback.');
           setError('Missing authorization code.');
           return;
         }
 
-        // 2️⃣ Validate CSRF state
-        const expectedState = localStorage.getItem('googlefit_oauth_state');
+        // --- strict state validation
         if (!returnedState || !expectedState || returnedState !== expectedState) {
-          console.error('State mismatch:', { returnedState, expectedState });
+          console.error('❌ State mismatch:', { returnedState, expectedState });
           setError('Invalid OAuth state. Please try connecting again.');
           return;
         }
 
-        // Clear stored state once validated
+        // --- clear state once validated
         localStorage.removeItem('googlefit_oauth_state');
 
-        // 3️⃣ Ensure logged-in Supabase session
+        // --- ensure logged-in user
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
         if (sessionError || !session) {
+          console.error('❌ No valid Supabase session found:', sessionError);
           setError('No valid session. Please log in and try again.');
           return;
         }
 
-        // 4️⃣ Build redirect URI (must match launch side exactly)
+        // --- redirect_uri must match the launch side
         const redirectUri = `${window.location.origin}/googlefit-callback`;
 
-        // 5️⃣ Exchange the code for tokens via your Supabase Edge Function
+        // --- backend exchange
         const EXCHANGE_URL = import.meta.env.VITE_EXCHANGE_GOOGLE_FIT_CODE_URL;
         if (!EXCHANGE_URL) {
-          setError('Exchange URL not configured (VITE_EXCHANGE_GOOGLE_FIT_CODE_URL).');
+          console.error('❌ Missing VITE_EXCHANGE_GOOGLE_FIT_CODE_URL');
+          setError('Exchange URL not configured.');
           return;
         }
+
+        console.log('➡️ Exchanging code with backend:', {
+          EXCHANGE_URL,
+          redirectUri,
+          user: session.user.id,
+        });
 
         const res = await fetch(EXCHANGE_URL, {
           method: 'POST',
@@ -165,11 +180,9 @@ export default function GoogleFitCallback() {
         });
 
         const result = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(result?.error || `Token exchange failed (${res.status})`);
-        }
+        if (!res.ok) throw new Error(result?.error || `Token exchange failed (${res.status})`);
 
-        // 6️⃣ Success → navigate to dashboard
+        console.log('✅ Exchange result:', result);
         navigate('/dashboard', { replace: true });
       } catch (err) {
         console.error('❌ Exchange failed:', err);

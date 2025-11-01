@@ -26,27 +26,28 @@
 //   const [stepsError, setStepsError] = useState(null);
 //   const [isStravaConnected, setIsStravaConnected] = useState(false);
 //   const [isGoogleFitConnected, setIsGoogleFitConnected] = useState(false);
+//   const [needsGoogleReconnect, setNeedsGoogleReconnect] = useState(false);
 //   const [lastSynced, setLastSynced] = useState(null);
 //   const [stepsSource, setStepsSource] = useState('manual');
-  
-//   const { logs, loading: healthLogsLoading } = useHealthLogs(user?.id);
-//   console.log("Dashboard - logs from useHealthLogs:", logs);
-//   console.log("Dashboard - healthLogsLoading:", healthLogsLoading);
 
+//   const { logs, loading: healthLogsLoading } = useHealthLogs(user?.id);
 //   const navigate = useNavigate();
 
 //   const handleGoogleFitReconnect = useCallback(async () => {
 //     setStepsLoading(true);
 //     setStepsError(null);
 //     try {
+//       // Clean server-side token row so Google re-issues refresh_token reliably
 //       await logoutFromGoogleFit(user.id);
 //       setIsGoogleFitConnected(false);
+//       setNeedsGoogleReconnect(false);
 //       setStepsSource('manual');
 //       setLastSynced(null);
-      
+
 //       const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-//       const redirectUri = import.meta.env.VITE_GOOGLE_REDIRECT_URI;
-//       const scope = 'https://www.googleapis.com/auth/fitness.activity.read https://www.googleapis.com/auth/userinfo.profile';
+//       const redirectUri = import.meta.env.VITE_GOOGLE_REDIRECT_URI; // must be .../googlefit-callback
+//       const scope =
+//         'https://www.googleapis.com/auth/fitness.activity.read https://www.googleapis.com/auth/userinfo.profile';
 //       window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&access_type=offline&prompt=consent`;
 //     } catch (e) {
 //       console.error('Google Fit reconnect failed:', e);
@@ -85,11 +86,7 @@
 //       const { error: upsertError } = await supabase
 //         .from('manual_metrics')
 //         .upsert(
-//           {
-//             user_id: user.id,
-//             date: todayISO,
-//             steps: steps,
-//           },
+//           { user_id: user.id, date: todayISO, steps },
 //           { onConflict: 'user_id,date' }
 //         );
 
@@ -99,10 +96,16 @@
 //       } else {
 //         console.log('✅ Google Fit sync successful and steps saved to manual_metrics. Steps:', steps);
 //       }
-
 //     } catch (e) {
 //       console.error('Google Fit sync failed:', e);
-//       setStepsError(e.message || 'Failed to sync Google Fit steps.');
+//       // Self-heal path from edge function
+//       if (e?.code === 'RECONNECT_REQUIRED') {
+//         setNeedsGoogleReconnect(true);
+//         setIsGoogleFitConnected(false);
+//         setStepsError('Google Fit connection expired. Please reconnect.');
+//       } else {
+//         setStepsError(e.message || 'Failed to sync Google Fit steps.');
+//       }
 //       setStepsToday(0);
 //     } finally {
 //       setStepsLoading(false);
@@ -134,18 +137,14 @@
 //         .update({
 //           steps_source: 'strava',
 //           strava_last_synced: now,
-//           steps: steps,
+//           steps,
 //         })
 //         .eq('id', user.id);
 
 //       const { error: upsertError } = await supabase
 //         .from('manual_metrics')
 //         .upsert(
-//           {
-//             user_id: user.id,
-//             date: todayISO,
-//             steps: steps,
-//           },
+//           { user_id: user.id, date: todayISO, steps },
 //           { onConflict: 'user_id,date' }
 //         );
 
@@ -155,7 +154,6 @@
 //       } else {
 //         console.log('✅ Strava sync successful and steps saved to manual_metrics. Steps:', steps);
 //       }
-
 //     } catch (e) {
 //       console.error('Strava sync failed:', e);
 //       setStepsError(e.message || 'Failed to sync Strava steps.');
@@ -164,7 +162,7 @@
 //       setStepsLoading(false);
 //     }
 //   }, [supabase, user]);
-  
+
 //   const fetchManualMetrics = useCallback(async () => {
 //     if (!user) return;
 //     const { data: metric, error: metricsError } = await supabase
@@ -175,7 +173,7 @@
 //       .limit(1)
 //       .single();
 //     if (metricsError && metricsError.code !== 'PGRST116') {
-//       console.error("Dashboard: Error fetching manual metrics:", metricsError);
+//       console.error('Dashboard: Error fetching manual metrics:', metricsError);
 //       setManualMetrics(null);
 //     } else {
 //       setManualMetrics(metric);
@@ -184,15 +182,11 @@
 
 //   useEffect(() => {
 //     const loadDashboardData = async () => {
-//       if (authLoading) {
-//         return;
-//       }
-
+//       if (authLoading) return;
 //       if (!user) {
 //         console.warn('🚨 Dashboard: No user session, AuthContext should redirect.');
 //         return;
 //       }
-//       console.log('Dashboard: User ID is', user.id);
 
 //       if (profile) {
 //         setStepsToday(profile.steps || 0);
@@ -204,7 +198,6 @@
 //           .select('*')
 //           .eq('id', user.id)
 //           .maybeSingle();
-
 //         if (profileRow) {
 //           setStepsToday(profileRow.steps || 0);
 //           setLastSynced(profileRow.strava_last_synced || profileRow.googlefit_last_synced || null);
@@ -221,55 +214,42 @@
 //         .select('access_token')
 //         .eq('user_id', user.id)
 //         .maybeSingle();
-//       if (stravaTokenError) {
-//         console.error("Dashboard: Error fetching Strava token:", stravaTokenError);
-//       }
+//       if (stravaTokenError) console.error('Dashboard: Error fetching Strava token:', stravaTokenError);
 //       setIsStravaConnected(!!stravaToken?.access_token);
 
+//       // ✅ Connected if (and only if) we have a refresh_token
 //       const { data: fitToken, error: fitTokenError } = await supabase
 //         .from('google_fit_tokens')
-//         .select('access_token')
+//         .select('refresh_token')
 //         .eq('user_id', user.id)
 //         .maybeSingle();
-//       if (fitTokenError) {
-//         console.error("Dashboard: Error fetching Google Fit token:", fitTokenError);
-//       }
-//       setIsGoogleFitConnected(!!fitToken?.access_token);
+//       if (fitTokenError) console.error('Dashboard: Error fetching Google Fit token:', fitTokenError);
+//       setIsGoogleFitConnected(!!fitToken?.refresh_token);
+//       setNeedsGoogleReconnect(!fitToken?.refresh_token ? false : needsGoogleReconnect);
 //     };
 
 //     loadDashboardData();
+//     // eslint-disable-next-line react-hooks/exhaustive-deps
 //   }, [authLoading, user, profile, supabase, fetchManualMetrics]);
-
-//   useEffect(() => {
-//     const showReconnectButton = stepsError && stepsError.toString().includes('Failed to refresh Google Fit access token.');
-//     // Check if the showReconnectButton state should be updated
-//     if (showReconnectButton !== false) {
-//       // Set state to trigger re-render and display the button
-//       // This part of the logic needs to be tied to a state variable, but as per our previous conversation, you can use a simple conditional render
-//     }
-//   }, [stepsError]);
 
 //   useEffect(() => {
 //     if (!user) return;
 //     const manualMetricsSubscription = supabase
 //       .channel(`manual_metrics_channel_${user.id}`)
-//       .on('postgres_changes', {
-//         event: '*',
-//         schema: 'public',
-//         table: 'manual_metrics',
-//         filter: `user_id=eq.${user.id}`
-//       }, payload => {
-//         console.log('Realtime payload received:', payload);
-//         if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-//           setManualMetrics(payload.new);
-//         } else if (payload.eventType === 'DELETE') {
-//           fetchManualMetrics();
+//       .on(
+//         'postgres_changes',
+//         { event: '*', schema: 'public', table: 'manual_metrics', filter: `user_id=eq.${user.id}` },
+//         (payload) => {
+//           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+//             setManualMetrics(payload.new);
+//           } else if (payload.eventType === 'DELETE') {
+//             fetchManualMetrics();
+//           }
 //         }
-//       })
+//       )
 //       .subscribe();
 
 //     return () => {
-//       console.log('Unsubscribing from manual_metrics real-time updates.');
 //       supabase.removeChannel(manualMetricsSubscription);
 //     };
 //   }, [user, supabase, fetchManualMetrics]);
@@ -284,7 +264,6 @@
 //     }
 //   }, [profile, isGoogleFitConnected, isStravaConnected, stepsSource, handleGoogleFitSync, handleStravaSync, stepsLoading, stepsToday]);
 
-
 //   const handleStravaConnect = () => {
 //     const clientId = import.meta.env.VITE_STRAVA_CLIENT_ID;
 //     const redirectUri = import.meta.env.VITE_STRAVA_REDIRECT_URI;
@@ -294,7 +273,8 @@
 //   const handleGoogleFitConnect = () => {
 //     const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 //     const redirectUri = import.meta.env.VITE_GOOGLE_REDIRECT_URI;
-//     const scope = 'https://www.googleapis.com/auth/fitness.activity.read https://www.googleapis.com/auth/userinfo.profile';
+//     const scope =
+//       'https://www.googleapis.com/auth/fitness.activity.read https://www.googleapis.com/auth/userinfo.profile';
 //     window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&access_type=offline&prompt=consent`;
 //   };
 
@@ -304,17 +284,12 @@
 //     try {
 //       await logoutFromGoogleFit(user.id);
 //       setIsGoogleFitConnected(false);
+//       setNeedsGoogleReconnect(false);
 //       setStepsSource('manual');
 //       setLastSynced(null);
-      
-//       // ✅ NEW: Explicitly remove Supabase session from local storage
-//       localStorage.removeItem('supabase.auth.session');
-
-//       await supabase.auth.signOut();
-      
-//       // ✅ NEW: Navigate to the login page to force re-evaluation of session
-//       navigate('/'); 
-
+//       // Optional: don’t nuke Auth here; just disconnect Google Fit
+//       // await supabase.auth.signOut();
+//       // navigate('/');
 //     } catch (e) {
 //       console.error('Google Fit logout failed:', e);
 //       setStepsError('Failed to logout from Google Fit. Please try again.');
@@ -322,44 +297,48 @@
 //       setStepsLoading(false);
 //     }
 //   };
-  
+
 //   const metricCards = [
 //     {
 //       label: 'Steps Today',
-//       value: stepsLoading ? 'Loading...' : (stepsToday),
+//       value: stepsLoading ? 'Loading...' : stepsToday,
 //       loading: stepsLoading,
 //       connected: isStravaConnected || isGoogleFitConnected,
 //       meta:
-//         (isStravaConnected && isGoogleFitConnected) ? '✅ STRAVA + GOOGLE FIT' :
-//         (isStravaConnected ? '✅ STRAVA' : (isGoogleFitConnected ? '✅ GOOGLE FIT' : 'No data source connected')),
+//         (isStravaConnected && isGoogleFitConnected)
+//           ? '✅ STRAVA + GOOGLE FIT'
+//           : (isStravaConnected ? '✅ STRAVA' : (isGoogleFitConnected ? '✅ GOOGLE FIT' : 'No data source connected')),
 //       lastSyncDisplay: lastSynced ? new Date(lastSynced).toLocaleString() : 'Never',
 //       actions: [
-//         (stepsError && stepsError.toString().includes('Failed to refresh Google Fit access token.') && {
+//         (needsGoogleReconnect && {
 //           label: 'Reconnect Google Fit',
 //           onClick: handleGoogleFitReconnect,
 //           variant: 'contained',
-//           color: 'primary'
 //         }),
-//         (!stepsError && isGoogleFitConnected && {
+//         (isGoogleFitConnected && {
+//           label: 'Logout Google Fit',
+//           onClick: handleGoogleFitLogout,
+//         }),
+//         (isGoogleFitConnected && !needsGoogleReconnect && {
 //           label: '🔄 Sync Google Fit',
 //           onClick: handleGoogleFitSync,
-//           disabled: stepsLoading || (stepsSource !== 'googlefit' && (isStravaConnected && stepsSource === 'strava'))
+//           disabled: stepsLoading || (stepsSource !== 'googlefit' && (isStravaConnected && stepsSource === 'strava')),
 //         }),
-//         (!stepsError && !isStravaConnected && {
+//         (!isStravaConnected && {
 //           label: 'Connect Strava',
 //           onClick: handleStravaConnect,
 //         }),
-//         (!stepsError && !isGoogleFitConnected && {
+//         (!isGoogleFitConnected && !needsGoogleReconnect && {
 //           label: 'Connect Google Fit',
 //           onClick: handleGoogleFitConnect,
 //         }),
-//         (!stepsError && isStravaConnected && {
+//         (isStravaConnected && {
 //           label: '🔄 Sync Strava',
 //           onClick: handleStravaSync,
-//           disabled: stepsLoading || (stepsSource !== 'strava' && (isGoogleFitConnected && stepsSource === 'strava'))
+//           disabled: stepsLoading || (stepsSource !== 'strava' && (isGoogleFitConnected && stepsSource === 'strava')),
 //         }),
 //       ].filter(Boolean),
-//       error: stepsError
+//       error: stepsError,
 //     },
 //     {
 //       label: 'Blood Pressure',
@@ -370,18 +349,14 @@
 //     },
 //     {
 //       label: 'Glucose',
-//       value: manualMetrics?.glucose
-//         ? `${manualMetrics.glucose} mg/dL`
-//         : '—',
+//       value: manualMetrics?.glucose ? `${manualMetrics.glucose} mg/dL` : '—',
 //     },
 //     {
 //       label: 'Heart Rate',
-//       value: manualMetrics?.heart_rate
-//         ? `${manualMetrics.heart_rate} bpm`
-//         : '—',
+//       value: manualMetrics?.heart_rate ? `${manualMetrics.heart_rate} bpm` : '—',
 //     },
 //   ];
-  
+
 //   if (authLoading) {
 //     return (
 //       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
@@ -394,12 +369,11 @@
 //   const isProfileIncomplete = user && (!profile || !profile.is_profile_complete);
 
 //   return (
-//     // ✨ NEW: Main container with the liquid glass effect.
 //     <Box
 //       sx={{
 //         position: 'relative',
 //         minHeight: '100vh',
-//         bgcolor: '#f0f2f5', // Fallback color
+//         bgcolor: '#f0f2f5',
 //         overflow: 'hidden',
 //         '&::before': {
 //           content: '""',
@@ -408,7 +382,8 @@
 //           left: 0,
 //           width: '100%',
 //           height: '100%',
-//           backgroundImage: 'radial-gradient(circle at 10% 20%, rgba(204, 219, 238, 0.7) 0%, rgba(204, 219, 238, 0.1) 80%), radial-gradient(circle at 90% 80%, rgba(204, 219, 238, 0.5) 0%, rgba(204, 219, 238, 0.1) 80%)',
+//           backgroundImage:
+//             'radial-gradient(circle at 10% 20%, rgba(204, 219, 238, 0.7) 0%, rgba(204, 219, 238, 0.1) 80%), radial-gradient(circle at 90% 80%, rgba(204, 219, 238, 0.5) 0%, rgba(204, 219, 238, 0.1) 80%)',
 //           backdropFilter: 'blur(10px)',
 //           WebkitBackdropFilter: 'blur(10px)',
 //           zIndex: -1,
@@ -451,11 +426,7 @@
 //                       justifyContent: 'space-between',
 //                     }}
 //                   >
-//                     <Typography
-//                       variant="subtitle2"
-//                       color="text.secondary"
-//                       gutterBottom
-//                     >
+//                     <Typography variant="subtitle2" color="text.secondary" gutterBottom>
 //                       {m.label}
 //                     </Typography>
 
@@ -468,20 +439,13 @@
 //                     )}
 
 //                     {m.meta && (
-//                       <Typography
-//                         variant="caption"
-//                         sx={{ color: 'success.main', mt: 0.5 }}
-//                       >
+//                       <Typography variant="caption" sx={{ color: 'success.main', mt: 0.5 }}>
 //                         {m.meta} {m.lastSyncDisplay && `| Last synced: ${m.lastSyncDisplay}`}
 //                       </Typography>
 //                     )}
 
 //                     {m.error && (
-//                       <Typography
-//                         variant="caption"
-//                         color="error"
-//                         sx={{ mt: 0.5 }}
-//                       >
+//                       <Typography variant="caption" color="error" sx={{ mt: 0.5 }}>
 //                         Error: {m.error}
 //                       </Typography>
 //                     )}
@@ -518,7 +482,6 @@
 //   );
 // }
 
-
 import React, { useEffect, useState, useCallback, useContext } from 'react';
 import {
   Typography,
@@ -554,6 +517,59 @@ export default function Dashboard() {
   const { logs, loading: healthLogsLoading } = useHealthLogs(user?.id);
   const navigate = useNavigate();
 
+  // ===== Google Fit OAuth (unified) =====
+  const GF_SCOPES = [
+    'https://www.googleapis.com/auth/fitness.activity.read',
+    'https://www.googleapis.com/auth/fitness.location.read',
+    'https://www.googleapis.com/auth/userinfo.email',
+  ].join(' ');
+
+  const startGoogleFitOAuth = useCallback(() => {
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+    if (!clientId) {
+      alert('VITE_GOOGLE_CLIENT_ID is missing');
+      console.error('❌ VITE_GOOGLE_CLIENT_ID is missing');
+      return;
+    }
+
+    // Build redirect from runtime origin so it matches the page that stored state
+    const redirectUri = `${window.location.origin}/googlefit-callback`;
+
+    // Secure URL-safe state
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    const state = btoa(String.fromCharCode(...bytes))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/,'');
+
+    // Persist for callback (must match there)
+    localStorage.setItem('googlefit_oauth_state', state);
+
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      scope: GF_SCOPES,
+      access_type: 'offline',
+      prompt: 'consent',
+      include_granted_scopes: 'true',
+      state,
+      // tracer to confirm this is OUR launcher
+      xsrc: 'gf-dashboard-v1',
+    });
+
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+
+    console.group('🔎 GF Launch from Dashboard');
+    console.log('CLIENT_ID:', clientId);
+    console.log('ORIGIN:', window.location.origin);
+    console.log('redirectUri:', redirectUri);
+    console.log('STATE (saved):', state);
+    console.log('SCOPES:', GF_SCOPES);
+    console.log('AUTH URL:', authUrl);
+    console.groupEnd();
+
+    window.location.href = authUrl;
+  }, []);
+
   const handleGoogleFitReconnect = useCallback(async () => {
     setStepsLoading(true);
     setStepsError(null);
@@ -565,19 +581,21 @@ export default function Dashboard() {
       setStepsSource('manual');
       setLastSynced(null);
 
-      const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-      const redirectUri = import.meta.env.VITE_GOOGLE_REDIRECT_URI; // must be .../googlefit-callback
-      const scope =
-        'https://www.googleapis.com/auth/fitness.activity.read https://www.googleapis.com/auth/userinfo.profile';
-      window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&access_type=offline&prompt=consent`;
+      // Launch the SAME OAuth flow (now with state + correct scopes)
+      startGoogleFitOAuth();
     } catch (e) {
       console.error('Google Fit reconnect failed:', e);
       setStepsError('Failed to reconnect. Please try again.');
     } finally {
       setStepsLoading(false);
     }
-  }, [user]);
+  }, [user, startGoogleFitOAuth]);
 
+  const handleGoogleFitConnect = useCallback(() => {
+    startGoogleFitOAuth();
+  }, [startGoogleFitOAuth]);
+
+  // ===== Sync handlers =====
   const handleGoogleFitSync = useCallback(async () => {
     setStepsLoading(true);
     setStepsError(null);
@@ -619,7 +637,6 @@ export default function Dashboard() {
       }
     } catch (e) {
       console.error('Google Fit sync failed:', e);
-      // Self-heal path from edge function
       if (e?.code === 'RECONNECT_REQUIRED') {
         setNeedsGoogleReconnect(true);
         setIsGoogleFitConnected(false);
@@ -684,6 +701,7 @@ export default function Dashboard() {
     }
   }, [supabase, user]);
 
+  // ===== Manual metrics fetch =====
   const fetchManualMetrics = useCallback(async () => {
     if (!user) return;
     const { data: metric, error: metricsError } = await supabase
@@ -701,6 +719,7 @@ export default function Dashboard() {
     }
   }, [user, supabase]);
 
+  // ===== Initial load =====
   useEffect(() => {
     const loadDashboardData = async () => {
       if (authLoading) return;
@@ -738,7 +757,7 @@ export default function Dashboard() {
       if (stravaTokenError) console.error('Dashboard: Error fetching Strava token:', stravaTokenError);
       setIsStravaConnected(!!stravaToken?.access_token);
 
-      // ✅ Connected if (and only if) we have a refresh_token
+      // Connected if (and only if) we have a refresh_token
       const { data: fitToken, error: fitTokenError } = await supabase
         .from('google_fit_tokens')
         .select('refresh_token')
@@ -753,6 +772,7 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, user, profile, supabase, fetchManualMetrics]);
 
+  // live updates on manual_metrics
   useEffect(() => {
     if (!user) return;
     const manualMetricsSubscription = supabase
@@ -775,6 +795,7 @@ export default function Dashboard() {
     };
   }, [user, supabase, fetchManualMetrics]);
 
+  // auto-sync based on profile flags
   useEffect(() => {
     if (profile && !stepsLoading) {
       if (isGoogleFitConnected && stepsSource === 'googlefit' && (profile.googlefit_last_synced === null || stepsToday === 0)) {
@@ -791,14 +812,6 @@ export default function Dashboard() {
     window.location.href = `https://www.strava.com/oauth/authorize?client_id=${clientId}&response_type=code&redirect_uri=${redirectUri}&scope=activity:read_all`;
   };
 
-  const handleGoogleFitConnect = () => {
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-    const redirectUri = import.meta.env.VITE_GOOGLE_REDIRECT_URI;
-    const scope =
-      'https://www.googleapis.com/auth/fitness.activity.read https://www.googleapis.com/auth/userinfo.profile';
-    window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&access_type=offline&prompt=consent`;
-  };
-
   const handleGoogleFitLogout = async () => {
     setStepsLoading(true);
     setStepsError(null);
@@ -808,9 +821,6 @@ export default function Dashboard() {
       setNeedsGoogleReconnect(false);
       setStepsSource('manual');
       setLastSynced(null);
-      // Optional: don’t nuke Auth here; just disconnect Google Fit
-      // await supabase.auth.signOut();
-      // navigate('/');
     } catch (e) {
       console.error('Google Fit logout failed:', e);
       setStepsError('Failed to logout from Google Fit. Please try again.');
