@@ -23,13 +23,9 @@
 //   );
 // }
 
-import React from 'react';
+import React, { useState } from 'react';
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-const SITE_URL =
-  import.meta.env.VITE_SITE_URL || (typeof window !== 'undefined' ? window.location.origin : '');
-const REDIRECT_URI = `${SITE_URL}/googlefit-callback`;
-
 const SCOPES = [
   'https://www.googleapis.com/auth/fitness.activity.read',
   'https://www.googleapis.com/auth/fitness.location.read',
@@ -37,15 +33,30 @@ const SCOPES = [
 ].join(' ');
 
 export default function ConnectGoogleFit() {
-  const handleConnect = () => {
-    // CSRF state (per-tab)
-    const state = Math.random().toString(36).slice(2);
-    sessionStorage.setItem('gf_oauth_state_v1', state);
+  const [busy, setBusy] = useState(false);
 
+  const handleConnect = () => {
+    if (busy) return;
+    setBusy(true);
+
+    // 1️⃣ Build redirect URI from runtime (always matches current origin)
+    const redirectUri = `${window.location.origin}/googlefit-callback`;
+
+    // 2️⃣ Generate a cryptographically secure state
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    const state = btoa(String.fromCharCode(...bytes))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+
+    // 3️⃣ Save state to localStorage (same key used in callback)
+    localStorage.setItem('googlefit_oauth_state', state);
+
+    // 4️⃣ Build OAuth URL
     const params = new URLSearchParams({
       response_type: 'code',
       client_id: CLIENT_ID,
-      redirect_uri: REDIRECT_URI,
+      redirect_uri: redirectUri,
       scope: SCOPES,
       access_type: 'offline',
       prompt: 'consent',
@@ -53,8 +64,24 @@ export default function ConnectGoogleFit() {
       state,
     });
 
+    // 5️⃣ Redirect user to Google OAuth
     window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
   };
 
-  return <button onClick={handleConnect}>Connect Google Fit</button>;
+  return (
+    <button
+      onClick={handleConnect}
+      disabled={busy}
+      style={{
+        background: busy ? '#ccc' : '#4285F4',
+        color: 'white',
+        padding: '10px 16px',
+        borderRadius: '8px',
+        border: 'none',
+        cursor: busy ? 'not-allowed' : 'pointer',
+      }}
+    >
+      {busy ? 'Redirecting...' : 'Connect Google Fit'}
+    </button>
+  );
 }

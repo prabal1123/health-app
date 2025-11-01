@@ -97,7 +97,6 @@
 // }
 
 
-// src/pages/GoogleFitCallback.jsx (or wherever it lives)
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabase';
@@ -106,8 +105,6 @@ import { CircularProgress, Box, Typography } from '@mui/material';
 export default function GoogleFitCallback() {
   const navigate = useNavigate();
   const [error, setError] = useState(null);
-
-  // Guard against double-invoke in React 18 StrictMode (dev)
   const ranRef = useRef(false);
 
   useEffect(() => {
@@ -116,7 +113,7 @@ export default function GoogleFitCallback() {
       ranRef.current = true;
 
       try {
-        // 1) Read code + state from URL
+        // 1️⃣ Read code and state from URL
         const params = new URLSearchParams(window.location.search);
         const code = params.get('code');
         const returnedState = params.get('state');
@@ -126,29 +123,28 @@ export default function GoogleFitCallback() {
           return;
         }
 
-        // 2) Validate CSRF state
+        // 2️⃣ Validate CSRF state
         const expectedState = localStorage.getItem('googlefit_oauth_state');
         if (!returnedState || !expectedState || returnedState !== expectedState) {
+          console.error('State mismatch:', { returnedState, expectedState });
           setError('Invalid OAuth state. Please try connecting again.');
           return;
         }
-        // clear stored state once validated
+
+        // Clear stored state once validated
         localStorage.removeItem('googlefit_oauth_state');
 
-        // 3) Ensure logged-in session
+        // 3️⃣ Ensure logged-in Supabase session
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
         if (sessionError || !session) {
           setError('No valid session. Please log in and try again.');
           return;
         }
 
-        // 4) Build redirect_uri EXACTLY like you used during auth
-        const siteUrl =
-          import.meta.env.VITE_SITE_URL ||
-          (typeof window !== 'undefined' ? window.location.origin : '');
-        const redirectUri = `${siteUrl}/googlefit-callback`;
+        // 4️⃣ Build redirect URI (must match launch side exactly)
+        const redirectUri = `${window.location.origin}/googlefit-callback`;
 
-        // 5) Call your Edge Function (Option B: full URL from env)
+        // 5️⃣ Exchange the code for tokens via your Supabase Edge Function
         const EXCHANGE_URL = import.meta.env.VITE_EXCHANGE_GOOGLE_FIT_CODE_URL;
         if (!EXCHANGE_URL) {
           setError('Exchange URL not configured (VITE_EXCHANGE_GOOGLE_FIT_CODE_URL).');
@@ -163,7 +159,7 @@ export default function GoogleFitCallback() {
           },
           body: JSON.stringify({
             code,
-            redirect_uri: redirectUri,   // must match exactly what Google saw
+            redirect_uri: redirectUri,
             user_id: session.user.id,
           }),
         });
@@ -173,7 +169,7 @@ export default function GoogleFitCallback() {
           throw new Error(result?.error || `Token exchange failed (${res.status})`);
         }
 
-        // 6) Optional: clean URL (remove query params) before nav
+        // 6️⃣ Success → navigate to dashboard
         navigate('/dashboard', { replace: true });
       } catch (err) {
         console.error('❌ Exchange failed:', err);
@@ -185,7 +181,16 @@ export default function GoogleFitCallback() {
   }, [navigate]);
 
   return (
-    <Box sx={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'80vh', textAlign:'center' }}>
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '80vh',
+        textAlign: 'center',
+      }}
+    >
       <CircularProgress />
       <Typography mt={2}>
         {error ? `Error: ${error}` : 'Connecting Google Fit...'}
